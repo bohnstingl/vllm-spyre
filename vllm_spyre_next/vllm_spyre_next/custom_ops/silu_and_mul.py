@@ -86,39 +86,35 @@ class SpyreSiluAndMul(SiluAndMul):
         return output
 
     @staticmethod
-    def forward_static(x1: torch.Tensor, x2: torch.Tensor) -> torch.Tensor:
+    def forward_static(x: torch.Tensor, hidden_size: int) -> torch.Tensor:
         """Spyre-optimized silu+multiply kernel compiled via torch.compile.
 
         Computes silu(x1) * x2 on the Spyre device, relying on torch-spyre's
-        registered aten::silu.out kernel. The two halves are passed in as
-        separate tensors because the Spyre device does not yet support tensor
-        slicing (strided views); the split is therefore performed on CPU before
-        this method is called (see forward_native).
+        registered aten::silu.out kernel. The full input is passed in and
+        split along the last dimension, before being activated and multiplied.
 
         Args:
-            x1: First half of the gated input, shape [..., d], on Spyre device
-                (float16).  silu is applied to this half.
-            x2: Second half of the gated input, shape [..., d], on Spyre device
-                (float16).  Acts as the multiplicative gate.
+            x: Input, shape [..., 2 * d], on Spyre device (float16).
+               silu is applied to of the first d-elements on the last dimension
+               and the second d-elements are used for multiplicative gate.
 
         Returns:
             Output tensor of shape [..., d] on the Spyre device (float16).
         """
+        # Note, we cannot re-use the upstream vLLM implementation at the moment
+        # because it uses tensor slicing, which is not supported in torch-spyre
+        # at the moment.
+        x1, x2 = torch.split(x, [hidden_size, hidden_size], -1)
         return F.silu(x1) * x2
 
     def forward_native(self, x: torch.Tensor) -> torch.Tensor:
-        """Spyre device execution: CPU slicing workaround, device transfer, kernel call.
-
-        The Spyre device does not currently support strided tensor views (slicing),
-        so the input is split into its two halves on the CPU before being
-        transferred to the device.  Once tensor slicing is supported this method
-        should revert to the simpler single-tensor path (see commented-out block).
+        """Spyre device execution:
 
         Execution steps:
-            1. Slice on CPU: split x into x1 = x[..., :d] and x2 = x[..., d:]
-            2. Device transfer: convert x1 and x2 independently to Spyre (float16)
-               via convert_for_spyre
-            3. Kernel execution: call compiled _fwd_spyre(x1_spyre, x2_spyre)
+            1. Compute the real hidden size d
+            2. Device transfer: convert x to Spyre (float16)
+               via convert
+            3. Kernel execution: call self._fwd(x, hidden_size)
             4. Result transfer: Spyre -> original device, restore original dtype
 
         Args:
@@ -131,14 +127,9 @@ class SpyreSiluAndMul(SiluAndMul):
         x_dtype = x.dtype
         x_device = x.device
 
-        # Note: Workaround with tensor slicing on CPU
-        d = x.shape[-1] // 2
-        x1 = x[..., :d]
-        x2 = x[..., d:]
-        out = self._fwd(
-            convert(x1, self._target_device, self._target_dtype),
-            convert(x2, self._target_device, self._target_dtype),
-        )
+        hidden_size = x.shape[-1] // 2
+
+        out = self._fwd(convert(x, self._target_device, self._target_dtype), hidden_size)
 
         # Transfer back to original device and restore original dtype
         return convert(out, x_device, x_dtype)
