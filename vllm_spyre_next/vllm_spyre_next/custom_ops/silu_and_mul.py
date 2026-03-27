@@ -128,7 +128,6 @@ class SpyreSiluAndMul(SiluAndMul):
         x_device = x.device
 
         hidden_size = x.shape[-1] // 2
-
         out = self._fwd(convert(x, self._target_device, self._target_dtype), hidden_size)
 
         # Transfer back to original device and restore original dtype
