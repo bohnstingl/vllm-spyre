@@ -72,7 +72,7 @@ class SpyreRMSNorm(RMSNorm):
 
         self._layer_name = register_layer(self, "spyre_rmsnorm")
 
-        logger.warning(
+        logger.warning_once(
             "SpyreRMSNorm: no dtype promotion is performed, "
             "expect numerical differences to upstream vLLM."
         )

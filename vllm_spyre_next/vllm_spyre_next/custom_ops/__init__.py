@@ -14,4 +14,4 @@ def register_all():
     rms_norm.register()
     silu_and_mul.register()
     vocab_parallel_embedding.register()
-    linear.register()
+    # linear.register()
